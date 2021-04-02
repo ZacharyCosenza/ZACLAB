@@ -76,10 +76,7 @@ def get_qEI_map(x,Y,params):
     return qEI
 
 def get_qEI(x,X,Y,params):
-    #Assume: always evaluate at x + 0.1
-    x_additional = x + 0.1
-    x = np.vstack((x,x_additional))
-    M = 200
+    M = 1000
     C = get_C(x,X,Y,params)
     mu,_ = get_mu(x,X,Y,params)
     L = np.linalg.cholesky(C + np.eye(C.shape[0]) * .00001)
@@ -93,33 +90,33 @@ def get_qEI(x,X,Y,params):
     qEI = np.mean(qEI)
     return qEI
 
-def get_KG(x,X,Y,params):
+def get_KG(mu,L,X,Y,params):
     M = 200
-    C = get_C(x,X,Y,params)
-    mu,_ = get_mu(x,X,Y,params)
-    L = np.linalg.cholesky(C + np.eye(C.shape[0]) * .00001)
     KG = np.zeros(M)
+    Z = np.random.normal(0,1,size = (L.shape[0],M))
     for m in np.arange(M):
-        Z = np.random.normal(0,1,size = L.shape[0])
-        yy = mu + L @ Z
+        yy = mu + L @ Z[:,m]
         KG[m] = max(yy)
-        if KG[m] < 0:
-            KG[m] = 0
     KG = np.mean(KG)
     return KG
 
 def get_qKG(x,xx,X,Y,params):
     #x is actual point
-    #xx is fantasy point
-    mu,_ = get_mu(xx,X,Y,params)
+    #xx is fantasy point for averaging
+    #Get Mean of x
+    mu,_ = get_mu(x,X,Y,params)
+    X_ = np.vstack((X,x))
+    Y_ = np.hstack((Y,mu))
+    #Get Covariance of Fantasy Points
+    C = get_C(xx,X_,Y_,params)
+    mu,_ = get_mu(xx,X_,Y_,params)
+    L = np.linalg.cholesky(C + np.eye(C.shape[0]) * .00001)
+    #Get Average of Fantasy Points
     q_KG_per_fantasy = np.zeros(xx.shape[0])
     for i in np.arange(xx.shape[0]):
-        X_ = np.vstack((X,xx[i,:]))
-        Y_ = np.vstack((Y.reshape(len(Y),1)
-                        ,mu[i]))
-        q_KG_per_fantasy[i] = get_KG(x,X_,Y_,params)
+        q_KG_per_fantasy[i] = get_KG(mu,L,X_,Y_,params)
     q_KG = np.mean(q_KG_per_fantasy)
-    return q_KG
+    return q_KG - max(Y)
 
 def get_qKG_map(x,xx,X,Y,params):
     x1 = x
@@ -131,33 +128,11 @@ def get_qKG_map(x,xx,X,Y,params):
             qKG[i,j] = get_qKG(Xin,xx,X,Y,params)
     return qKG
 
-def wrapper_qEI(p,X,Y,params):
-    qEI = -get_qEI(p,X,Y,params)
-    return qEI
-
-def opt_qEI(X,Y,params):
-    x_bounds = ((0,1),(0,1),(0,1),(0,1))
-    B = 10
-    alpha_bfgs = np.zeros(B)
-    x_keep = np.zeros([B,len(x_bounds)])
-    for b in np.arange(B):
-        x0 = np.random.uniform(0,1,size = len(x_bounds))
-        bfgs = scipy.optimize.fmin_l_bfgs_b(func=wrapper_qEI, x0=x0, args=(X,Y,params), approx_grad=True,
-                                                bounds=x_bounds, m=10, factr=10.0, pgtol=0.0001,
-                                                epsilon=1e-08, iprint=-1, maxfun=15000, maxiter=1000, 
-                                                disp=0, callback=None)
-        x_keep[b,:] = bfgs[0]
-        alpha_bfgs[b] = get_qEI(bfgs[0],X,Y,params)
-    
-    ind_bfgs = np.argsort(alpha_bfgs)
-    x_opt = x_keep[ind_bfgs[-1],:]
-    print(x_opt)
-
 #Training and Testing Data
 N = 5
 X = np.random.uniform(0,1,(N,2))
 Y = get_y(X)
-n = 30
+n = 20
 x = np.zeros((n,2))
 x[:,0] = np.linspace(0,1,n)
 y = get_y(x)
@@ -173,23 +148,23 @@ plt.xlabel('x')
 plt.ylabel('y')
 
 #Analytical 2-EI Function
-two_EI = get_2EI_map(x,X,Y,params)
-plt.figure()
-sea.heatmap(two_EI)
-plt.xlabel('x2')
-plt.ylabel('x1')
-plt.title('q = 2, EI using Analytical')
+# two_EI = get_2EI_map(x,X,Y,params)
+# plt.figure()
+# sea.heatmap(two_EI)
+# plt.xlabel('x2')
+# plt.ylabel('x1')
+# plt.title('q = 2, EI using Analytical')
 
 #q-EI Function with Optimization
-q_EI = get_qEI_map(x,Y,params)
-plt.figure()
-sea.heatmap(q_EI)
-plt.xlabel('x2')
-plt.ylabel('x1')
-plt.title('q = 2, EI using MC')
+# q_EI = get_qEI_map(x,Y,params)
+# plt.figure()
+# sea.heatmap(q_EI)
+# plt.xlabel('x2')
+# plt.ylabel('x1')
+# plt.title('q = 2, EI using MC')
 
-#q-KG Function
-N_fant = 5
+#q-KG Function with Average Fantasy Points
+N_fant = 20
 xx = np.random.uniform(0,1,(N_fant,2))
 q_KG = get_qKG_map(x,xx,X,Y,params)
 plt.figure()
