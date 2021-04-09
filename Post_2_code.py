@@ -247,6 +247,7 @@ params_0 = np.array([10,10,10])
 bfgs_res = minimize(wrapper_L,x0 = params_0,args=(X,Y), method='L-BFGS-B', 
                jac = wrapper_dL, bounds = ((0.1,20), (0.1,20), (0.1,20)))
 params_bfgs_opt = bfgs_res['x']
+print(bfgs_res)
 
 #Plot Contours
 MakePlot(X,Y,params_bfgs_opt,'mean')

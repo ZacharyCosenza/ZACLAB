@@ -17,7 +17,9 @@
 \date{March 22, 2021}
 \maketitle
 
-Hey everyone sorry for the one week delay in posting. I wasn't happy with the results from last week and wanted another week to work on this stuff. As an apology I have another post coming out today (Post 17) about linear basis functions that's a light read and a lot of ``fun''. Today we will be tackling the difficult subject of acquisition functions for Bayesian optimization that can only be solved with monte carlo methods.
+\textbf{Edited: April 2, 2021}
+
+Hey everyone sorry for the one week delay in posting. I wasn't happy with the results from last week and wanted another week to work on this stuff. As an apology I have another post coming out today (Post 17) about linear basis functions that's a light read and a lot of ``fun''. Today we will be tackling the difficult subject of acquisition functions for Bayesian optimization that can only be solved with monte carlo methods. Note that this has been edited because I made some big mistakes in some simulations.
 
 \section{q-EI}
 
@@ -78,20 +80,28 @@ For any covariance kernel $K(x,x')$ which we have gone over. In this case $x$ is
 The next acquisition function is based on the ``knowledge gradient'' problem:
 
 \begin{equation}
-KG(x)=E_y[max_{y'}\{(y' | y)^+\}]
+KG(x)=max_{y'}\{(y' | y)^+\} - max\{Y\}
 \end{equation}
 
 \vspace{5mm}
 
-The idea here is we want to maximize $KG(x)$ which is the expectation (average) over our current data set $Y$ of the maximum of a ``fantasy'' data set $Y'$. In English, this means we want to maximize the ``next-step'' potential of our current data set by projecting forward for additional maximization. So by pretending our current data set is made up of some fantasy points, we condition on those points and maximize the average of the result:
+The idea here is we want to maximize $KG(x)$ which is the maximum of a ``fantasy'' data set $Y'$. In English, this means we want to maximize the ``next-step'' potential of our current data set by projecting forward for additional maximization. So by pretending our current data set is made up of some fantasy points, we condition on those points and maximize the average of the result:
 
 \begin{align*}
-q-KG(x)=F^{-1} \Sigma_{f=1}^F [M^{-1}\Sigma_{j=1}^M max\{y_j\}] | x_f
+KG(x)=F^{-1} \Sigma_{f=1}^F max\{y_j\} | x - max\{Y\}
 \end{align*}
 
 \vspace{5mm}
 
-The reason this one is harder to compute than the EI ones is that KG requires two ``steps'', which itself requires conditioning on fake data. Also note that we use the reparameterization trick as before for some posterior covariance $C$: $y \sim GP(\mu,C) \rightarrow \mu + Lz$ where $LL^T=C$. Also note that for the fake fantasy data I use the mean prediction in the GP and recalculate $C$ as $x'=\{x',x_f\}$.
+The reason this one is harder to compute than the EI ones is that KG requires two ``steps'', which itself requires conditioning on data, and thus recalculation of the Cholesky Decomposition $C$. For those most accustom to simulation, we add data $x$ and $y$ to update $C$, then maximize the resulting posterior. Because this is a statistical model, we do this $F$ times to get an average. 
+
+\begin{align*}
+KG(x)=F^{-1} \Sigma_{f=1}^F max\{\mu + Lz\} | x - max\{Y\}
+\end{align*}
+
+\vspace{5mm}
+
+We can use the reparameterization trick as before for some posterior covariance $C$: $y \sim GP(\mu,C) \rightarrow \mu + Lz$ where $LL^T=C$.
 
 \vspace{5mm}
 

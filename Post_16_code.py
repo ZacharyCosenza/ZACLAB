@@ -7,7 +7,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 import seaborn as sea
-import scipy.optimize
 
 def get_y(x):
     y = (x[:,0] - 0.5)**2 + 0.25*x[:,0] - 1
@@ -20,19 +19,26 @@ def get_y_fid(x):
     y = ((x[:,0] - 0.5)**2 + 0.25*x[:,0] - 1) + 1 * (x[:,-1] == 1) + 2 * (x[:,-1] == 2)
     return y.reshape(-1,1)
 
+def get_mu_MC(x,X,Y,params):
+    C = get_C(x,X,Y,params)
+    L = np.linalg.cholesky(C + np.eye(C.shape[0]) * .0000001)
+    mu,_ = get_mu(x,X,Y,params)
+    M = 100000
+    Z = np.random.normal(0,1,size = (len(mu),M))
+    mu = np.tile(mu.reshape(len(mu),1),(1,M))
+    yy = mu + L @ Z
+    y = np.mean(yy,axis=1)
+    return y
+
 def get_mu(x,X,Y,params):
-    N = X.shape[0]
-    n = x.shape[0]
-    y = np.zeros(n)
-    sigma2 = np.zeros(n)
-    Ky_inv = np.linalg.pinv(get_K(X,X,params) + np.eye(N) * params[1]**2)
-    for i in range(n):
-        xin = x[i,:].reshape(1,x.shape[1])
-        KxX = get_K(xin,X,params)
-        Kxx = get_K(xin,xin,params)
-        y[i] = KxX @ Ky_inv @ Y
-        sigma2[i] = Kxx - KxX @ Ky_inv @ KxX.T
-    return y,sigma2
+    KXX = get_K(X,X,params)
+    KxX = get_K(x,X,params)
+    Kxx = get_K(x,x,params)
+    Ky_inv = np.linalg.pinv(KXX + params[0]**2 * np.eye(X.shape[0]))
+    mu = KxX @ Ky_inv @ Y
+    cov = Kxx - KxX @ Ky_inv @ KxX.T
+    sigma2 = np.diag(cov)
+    return mu,sigma2
 
 def get_K(x,X,params):
     N = X.shape[0]
@@ -90,16 +96,6 @@ def get_qEI(x,X,Y,params):
     qEI = np.mean(qEI)
     return qEI
 
-def get_KG(mu,L,X,Y,params):
-    M = 200
-    KG = np.zeros(M)
-    Z = np.random.normal(0,1,size = (L.shape[0],M))
-    for m in np.arange(M):
-        yy = mu + L @ Z[:,m]
-        KG[m] = max(yy)
-    KG = np.mean(KG)
-    return KG
-
 def get_qKG(x,xx,X,Y,params):
     #x is actual point
     #xx is fantasy point for averaging
@@ -112,10 +108,13 @@ def get_qKG(x,xx,X,Y,params):
     mu,_ = get_mu(xx,X_,Y_,params)
     L = np.linalg.cholesky(C + np.eye(C.shape[0]) * .00001)
     #Get Average of Fantasy Points
-    q_KG_per_fantasy = np.zeros(xx.shape[0])
-    for i in np.arange(xx.shape[0]):
-        q_KG_per_fantasy[i] = get_KG(mu,L,X_,Y_,params)
-    q_KG = np.mean(q_KG_per_fantasy)
+    M = 200
+    Z = np.random.normal(0,1,size = (L.shape[0],M))
+    q_KG = np.zeros(M)
+    for m in np.arange(M):
+        yy = mu + L @ Z[:,m]
+        q_KG[m] = max(yy)
+    q_KG = np.mean(q_KG)
     return q_KG - max(Y)
 
 def get_qKG_map(x,xx,X,Y,params):
@@ -132,18 +131,20 @@ def get_qKG_map(x,xx,X,Y,params):
 N = 5
 X = np.random.uniform(0,1,(N,2))
 Y = get_y(X)
-n = 20
+n = 50
 x = np.zeros((n,2))
 x[:,0] = np.linspace(0,1,n)
 y = get_y(x)
 params = np.array([6,1,1]) #pick some parameters for the gp
 y_pred,_ = get_mu(x,X,Y,params)
+y_mc = get_mu_MC(x,X,Y,params)
 
 #Plot Data
 plt.figure()
 plt.plot(X[:,0],Y,'rs')
 plt.plot(x[:,0],y,'k.')
 plt.plot(x[:,0],y_pred,'r.')
+plt.plot(x[:,0],y_mc,'b.')
 plt.xlabel('x')
 plt.ylabel('y')
 
@@ -164,14 +165,14 @@ plt.ylabel('y')
 # plt.title('q = 2, EI using MC')
 
 #q-KG Function with Average Fantasy Points
-N_fant = 20
-xx = np.random.uniform(0,1,(N_fant,2))
-q_KG = get_qKG_map(x,xx,X,Y,params)
-plt.figure()
-sea.heatmap(q_KG)
-plt.xlabel('x2')
-plt.ylabel('x1')
-plt.title('q = 2, KG using MC')
+# N_fant = 25
+# xx = np.random.uniform(0,1,(N_fant,2))
+# q_KG = get_qKG_map(x,xx,X,Y,params)
+# plt.figure()
+# sea.heatmap(q_KG)
+# plt.xlabel('x2')
+# plt.ylabel('x1')
+# plt.title('q = 2, KG using MC')
 
 #%% Helper Function for Botorch
 

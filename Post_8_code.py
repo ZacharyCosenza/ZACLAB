@@ -12,7 +12,7 @@ from botorch.fit import fit_gpytorch_model
 
 def get_Y(X):
     n,p = X.shape
-    Y = X[:,0]**2 - X[:,1]**2
+    Y = X[:,0]**2 + X[:,1]**2
     return Y.reshape(-1,1)
 
 def PlotGPContour(X,Y,params,key):
@@ -120,14 +120,14 @@ MakePlot(X,Y,Custom,'bo2') #Plot Contour
 
 #%% Part 3 Find the Best Objective Value Point
 
-from botorch.gen import gen_candidates_scipy
+from botorch import gen_candidates_scipy
 
 num_multi_starts = 20
 candidates = []
 acq_values = []
 bounds = torch.tensor([[0,0],[1,1]])
 for i in range(num_multi_starts):
-    xo = torch.tensor(np.random.uniform(low = 0, high = 1, size = 2)).double()
+    xo = torch.tensor(np.random.uniform(low = 0, high = 1, size = 2)).reshape(1,2)
     batch_candidates, batch_acq_values = gen_candidates_scipy(
             initial_conditions=xo,
             acquisition_function=Custom,
