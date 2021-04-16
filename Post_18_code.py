@@ -2,15 +2,14 @@
 # Post 18 Multi-Fidelity Model Toolbox Development
 
 # TODO ----------------------
-# Priors
+# Priors (noted lambda 0 is too high --> flat)
 # HMC Hyperparameter Training
 # Robust Toy Problems
-# Cholesky Improvements for Conditioning in KG
-# Derivative of GP
-# Derivative of L Matrix
-# Radial Constraints on Location 
+# Cholesky Conditioning in KG
+# Gradient of q-KG
 # q-Expected Improvement
-# Nonlinear Corelations w/ Fidelities
+# 1) what happens when 0 vs 1,2 correlation breaks down?
+# 2) what happens when only 0 data used?
 # ---------------------------
 
 import numpy as np
@@ -19,6 +18,7 @@ import scipy.optimize
 from scipy.optimize import minimize
 import seaborn as sea
 import time
+from tqdm import tqdm
 
 import torch
 import gpytorch
@@ -32,25 +32,49 @@ from gpytorch.constraints import Positive
 
 import copy
 
+np.random.seed(np.random.randint(1000))
+
+# def get_f(x):
+#     #Initalize
+#     y = np.zeros(x.shape[0])
+#     #Get Fidelities
+#     ind_0 = x[:,-1] == 0
+#     ind_1 = x[:,-1] == 1
+#     ind_2 = x[:,-1] == 2
+#     #Underlying Function
+#     y[ind_0] = np.sum((x[ind_0,0:5] - 0.5)**2,axis = 1) + np.sum(x[ind_0,5:10],axis = 1)
+#     y[ind_0] = y[ind_0] + np.random.uniform(0,0.1,size = len(y[ind_0]))
+#     #Add Fidelity 1
+#     y[ind_1] = np.sum((x[ind_1,0:5] - 0.5)**2,axis = 1) + np.sum(x[ind_1,5:10],axis = 1)
+#     y[ind_1] = y[ind_1] + np.random.uniform(0,0.25,size = len(y[ind_1]))
+#     #Add Fidleity 2
+#     y[ind_2] = np.sum((x[ind_2,0:2] - 0.5)**2,axis = 1) + np.sum(x[ind_2,0:2],axis = 1)
+#     y[ind_2] = y[ind_2] + np.random.uniform(0,0.1,size = len(y[ind_2]))
+#     return -y
+
 def get_f(x):
+    #Initalize
+    y = np.zeros(x.shape[0])
     #Get Fidelities
-    ind_1 = np.where((x[:,-1] == 1))
-    ind_2 = np.where((x[:,-1] == 2))
+    ind_0 = x[:,-1] == 0
+    ind_1 = x[:,-1] == 1
+    ind_2 = x[:,-1] == 2
     #Underlying Function
-    y = np.sum((x[:,0:5] - 0.5)**2,axis = 1) + np.sum(x[:,5:-1],axis = 1)
-    y = y + np.random.uniform(0,0.1,size = len(y))
+    y[ind_0] = np.sum(x[ind_0,:-1],axis = 1)
     #Add Fidelity 1
-    y[ind_1] = y[ind_1] + 1
+    y[ind_1] = np.random.uniform(0,0.25,size = len(y[ind_1]))
     #Add Fidleity 2
-    y[ind_2] = np.random.normal(0,0.25,size = len(ind_2[0])) + y[ind_2]
-    return -y
+    y[ind_2] = np.sum(x[ind_2,:-1],axis = 1)
+    y[ind_2][x[ind_2,0]<=0.5] = 0
+    return y
 
 #Generate Training and Testing Data
 N = 20
 n = 400
-px = 10 #not including fidelity
+n_reps = 1
+px = 1 #not including fidelity
 X = np.random.uniform(0,1,size = (N,px+1))
-X = np.repeat(X,1,axis = 0) #replicates
+X = np.repeat(X,n_reps,axis = 0) #replicates
 x = np.random.uniform(0,1,size = (n,px+1))
 task = np.random.choice(3,X.shape[0],p=[0.2,0.4,0.4])
 X[:,-1] = task
@@ -103,16 +127,16 @@ def generate_constraints(p):
         
     return con_list
 
-def get_opt_qEI(q,q0,Nxx,X,Y,params):
+def get_opt_qKG(q,q0,Nxx,X,Y,params):
     #Input is Unwrapped
     x_size = (q + q + q0 + Nxx) * px
     x_bounds = []
     for i in range(x_size):
         x_bounds.append((0,1))
-    M = 5
+    M = 35
     x = np.zeros([M,x_size])
     aq = np.zeros(M)
-    for i in np.arange(M):
+    for i in tqdm(np.arange(M)):
         x0 = np.random.uniform(low = 0, high = 1, size = x_size)
         # bfgs = scipy.optimize.fmin_l_bfgs_b(func=wrapper_qKG, x0=x0,args=(q,q0,Nxx,X,Y,params), approx_grad=True,
         #                                 bounds=x_bounds, m=10, factr=10.0, pgtol=0.0001,
@@ -129,7 +153,7 @@ def get_opt_qEI(q,q0,Nxx,X,Y,params):
                         constraints = con)
         x[i,:] = slsqp['x']
         aq[i] = slsqp['fun']
-    ind_kg = np.argmax(aq)
+    ind_kg = np.argmin(aq)
     x_opt = x[ind_kg,:]
     x_opt = x_opt.reshape((q + q + q0 + Nxx),px)
     tasks = np.vstack((np.zeros([q0,1]),np.ones([q,1]),2*np.ones([q,1])))
@@ -150,31 +174,35 @@ def wrapper_qKG(p,q,q0,Nxx,X,Y,params):
     KG = get_qKG(x,xx,X,Y,params)
     return -KG
 
+def get_chol_samples(x,mu,C,X,Y,M,params):
+    L = np.linalg.cholesky(C + np.eye(len(mu)) * 0.00001)
+    z = np.random.normal(0,1,size = (len(mu),M))
+    y_sample = mu.reshape(len(mu),1) + L @ z
+    return y_sample
+
 def get_qKG(x,xx,X,Y,params):
-    # # x Actual Point
-    # # xx Fantasy Point at Fidelity = 0
     # mu_,_ = get_mu(x,X,Y,params)
     # X_ = np.vstack((X,x))
     # Y_ = np.hstack((Y,mu_))
-    # C = get_C(xx,X_,Y_,params)
-    # L = np.linalg.cholesky(C + np.eye(C.shape[0]) * .00001)
     # mu,_ = get_mu(xx,X_,Y_,params)
-    
-    # M = 100000
-    # Z = np.random.normal(0,1,size = (len(mu),M))
-    # mu = np.tile(mu.reshape(len(mu),1),(1,M))
-    # yy = mu + L @ Z
-    # y = np.mean(yy)
-    # q_KG = y
-    
+    # q_KG = np.mean(mu)
     #x Actual Point
     #xx Fantasy Point at Fidelity = 0
     mu_,_ = get_mu(x,X,Y,params)
-    X_ = np.vstack((X,x))
-    Y_ = np.hstack((Y,mu_))
-    mu,_ = get_mu(xx,X_,Y_,params)
+    C = get_C(x,X,Y,params)
+    #Get Nxx Samples of Posterior
+    M = xx.shape[0]
+    yy = get_chol_samples(x,mu_,C,X,Y,M,params)
+    #For Each Sample, Predict Each Fantasy
+    qkg_per_fant = np.zeros(M)
+    for i in np.arange(M):   
+        X_ = np.vstack((X,x))
+        Y_ = np.hstack((Y,yy[:,i]))
+        x_fant = xx[i,:].reshape(1,xx.shape[1])
+        mu,_ = get_mu(x_fant,X_,Y_,params)
+        qkg_per_fant[i] = mu
     #Average of Fantasy Points (Balandat et al)
-    q_KG = np.mean(mu)
+    q_KG = np.mean(qkg_per_fant)
     return q_KG
 
 def get_Lgrad(params,X,Y):
@@ -193,6 +221,9 @@ def get_Lgrad(params,X,Y):
             grad = get_dKdlam(X,params,i)
         A = 0.5 * Y.T @ Ky_inv @ grad @ Ky_inv @ Y - 0.5 * np.trace(Ky_inv @ grad)
         Lgrad[i] = A
+    #Use Normal Prior
+    log_prior = get_prior_like_grad(params)
+    Lgrad = Lgrad + log_prior
     return np.array(Lgrad)
 
 def get_dKdsigma(X,params):
@@ -283,18 +314,38 @@ def get_K(x,X,params):
 def get_like(params,X,Y):
     KXX = get_K(X,X,params)
     Ky = KXX + params[0]**2 * np.eye(X.shape[0])
-    logp = -0.5 * Y.T @ np.linalg.pinv(Ky) @ Y - 0.5 * np.log(np.linalg.det(Ky)) - n/2*np.log(2*np.pi)
+    logp = -0.5 * Y.T @ np.linalg.pinv(Ky) @ Y - 0.5 * np.log(np.linalg.det(Ky)) 
+    - n/2*np.log(2*np.pi) + get_prior_like(params)
     return logp
+
+def get_prior_like(p):
+    #Get Prior for Lambda Parameter
+    means = np.array([1,1,1])
+    sigs = np.diag((means/2)**2)
+    #Return Normal Prior of Log Likelihood
+    S = np.linalg.inv(sigs)
+    x_mu = p[num_IS+1:] - means
+    log_prior = -0.5 * x_mu @ S @ x_mu
+    return log_prior
+
+def get_prior_like_grad(p):
+    #Get Prior for Lambda Parameter
+    log_prior_grad = np.zeros(len(p))
+    means = np.array([1,1,1])
+    sigs = np.diag((means/2)**2)
+    #Return Normal Prior of Log Likelihood
+    S = np.linalg.inv(sigs)
+    x_mu = p[num_IS+1:] - means
+    #Get Gradient
+    log_prior_lambda_grad = -0.5 * (S + S.T) @ x_mu
+    log_prior_grad[num_IS+1:] = log_prior_lambda_grad
+    return log_prior_grad
 
 def wrapper_like(p,X,Y):
     return -get_like(p,X,Y)
 
 def wrapper_glike(p,X,Y):
-    return - get_Lgrad(p,X,Y)
-
-def wrapper_mse(p,X,Y):
-    mu,_ = get_mu(X,X,Y,p)
-    return sum((mu - Y)**2)
+    return -get_Lgrad(p,X,Y)
 
 def get_opt_params(X,Y):
     num_hypers = 2 * num_IS + 1
@@ -307,7 +358,7 @@ def get_opt_params(X,Y):
     M = 35
     params = np.zeros([M,num_hypers])
     like = np.zeros(M)
-    for i in np.arange(M):
+    for i in tqdm(np.arange(M)):
         params0 = np.random.uniform(low = param_low, high = 1, size = num_hypers)
         bfgs = scipy.optimize.fmin_l_bfgs_b(func=wrapper_like, x0=params0, fprime = wrapper_glike, 
                                             args=(X,Y), approx_grad=False,
@@ -321,22 +372,22 @@ def get_opt_params(X,Y):
     return params_opt
 
 # Solution to GP Problem
-# params = get_opt_params(X,Y)
-params = np.array([1,1,1,1,1,1,1])
+params = get_opt_params(X,Y)
+# params = np.array([0.0360055,0.3983522,0.0582616,2.19184049,0.95576314,1.42709205,4.16834235])
 y_custom,std2_custom = get_mu(x,X,Y,params)
 
 # Test of q-KG
-q = 3
-q0 = 2
-Nxx = 2
+q = 2
+q0 = 1
+Nxx = 10
 
 # Test of q-KG Optimization
-start = time.time()
-x_opt_query,x_fantasy = get_opt_qEI(q,q0,Nxx,X,Y,params)
-end = time.time()
-print(end - start)
-print(x_opt_query)
-print(x_fantasy)
+# start = time.time()
+# x_opt_query,x_fantasy = get_opt_qKG(q,q0,Nxx,X,Y,params)
+# end = time.time()
+# print(end - start)
+# print(x_opt_query)
+# print(x_fantasy)
 
 def train(X,Y,model,likelihood,training_iter=100):
     X = torch.tensor(X,dtype=torch.double)
@@ -439,23 +490,22 @@ class CustomModel(gpytorch.models.ExactGP):
 # train(X,Y,model_custom,like_custom)
 # y_bo_custom = predict(model_custom,like_custom,x).mean
 
-# model_fid = SingleTaskMultiFidelityGP(
-#     torch.tensor(X), 
-#     torch.tensor(Y).unsqueeze(-1), 
-#     outcome_transform=Standardize(m=1),
-#     data_fidelity=p)
+model_fid = SingleTaskMultiFidelityGP(
+    torch.tensor(X), 
+    torch.tensor(Y).unsqueeze(-1),
+    data_fidelity=px)
 # model = SingleTaskGP(torch.tensor(X[X[:,-1]==0,:-1]),
-#                      torch.tensor(Y[X[:,-1]==0]).unsqueeze(-1))
-# mll_fid = ExactMarginalLogLikelihood(model.likelihood, model_fid)
-# mll_fid = fit_gpytorch_model(mll_fid)
+#                       torch.tensor(Y[X[:,-1]==0]).unsqueeze(-1))
+mll_fid = ExactMarginalLogLikelihood(model_fid.likelihood, model_fid)
+mll_fid = fit_gpytorch_model(mll_fid)
 # mll = ExactMarginalLogLikelihood(model.likelihood,model)
 # mll = fit_gpytorch_model(mll)
 # model_task = MultiTaskGP(torch.tensor(X),torch.tensor(Y).unsqueeze(-1),task_feature=-1)
 
-# with torch.no_grad():
-#     y_bo_fid = model_fid.posterior(torch.tensor(x)).mean.cpu().numpy()
-#     y_bo = model.posterior(torch.tensor(x[x[:,-1]==0,:-1])).mean.cpu().numpy()
-#     y_task = model_task.posterior(torch.tensor(x[:,:-1])).mean.cpu().numpy()
+with torch.no_grad():
+    y_bo_fid = model_fid.posterior(torch.tensor(x)).mean.cpu().numpy()
+    # y_bo = model.posterior(torch.tensor(x[x[:,-1]==0,:-1])).mean.cpu().numpy()
+    # y_task = model_task.posterior(torch.tensor(x[:,:-1])).mean.cpu().numpy()
 
 # X_linear = X[X[:,-1]==0,:-1]
 # x_linear = x[:,:-1]
@@ -469,29 +519,29 @@ class CustomModel(gpytorch.models.ExactGP):
 plt.figure()
 plt.subplot(1,2,1)
 markersize = 2
-plt.plot(x[:,0],y,'r.',markersize=markersize)
-plt.plot(X[X[:,-1]==0,0],Y[X[:,-1]==0],'rs')
-plt.plot(X[X[:,-1]==1,0],Y[X[:,-1]==1],'r+')
-plt.plot(X[X[:,-1]==2,0],Y[X[:,-1]==2],'r*')
-# plt.plot(x[:,0],y_bo_fid,'b.',markersize=markersize)
+plt.plot(x[:,0],y,'k.',markersize=markersize)
+plt.plot(X[X[:,-1]==0,0],Y[X[:,-1]==0],'ks')
+plt.plot(X[X[:,-1]==1,0],Y[X[:,-1]==1],'k+')
+plt.plot(X[X[:,-1]==2,0],Y[X[:,-1]==2],'k*')
+plt.plot(x[:,0],y_bo_fid,'b.',markersize=markersize)
 # plt.plot(x[x[:,-1]==0,0],y_bo,'b.',markersize=markersize)
 # plt.plot(x[:,0],y_task[:,0],'y.',markersize=markersize)
 # plt.plot(x[:,0],y_linear,'c.',markersize=markersize)
 # plt.plot(x[:,0],y_poly,'g.',markersize=markersize)
-plt.plot(x[:,0],y_custom,'cs',markersize=markersize)
+plt.plot(x[:,0],y_custom,'r.',markersize=markersize)
 # plt.plot(x[:,0],y_bo_custom,'b.',markersize=markersize)
 # plt.xlabel('x')
 # plt.ylabel('y')
 
 plt.subplot(1,2,2)
-# plt.plot(y,y_bo_fid,'b.',markersize=markersize)
+plt.plot(y,y_bo_fid,'b.',markersize=markersize)
 # plt.plot(y,y_bo,'b.',markersize=markersize)
 # plt.plot(y,y_task[:,0],'y.',markersize=markersize)
 # plt.plot(y,y_linear,'c.',markersize=markersize)
 # plt.plot(y,y_poly,'g.',markersize=markersize)
 # plt.plot(y,y_bo_custom,'b.',markersize=markersize)
-plt.plot(y,y_custom,'c.',markersize=markersize)
-plt.plot(y,y,'r',markersize=markersize)
+plt.plot(y,y_custom,'r.',markersize=markersize)
+plt.plot(y,y,'k',markersize=markersize)
 # plt.xlabel('y true')
 # plt.ylabel('y pred')
 
@@ -501,4 +551,4 @@ plt.plot(y,y,'r',markersize=markersize)
 # print("MSE Botorch MultiTask: {}".format(sum((y_task[:,0]-y)**2)))
 # print("MSE Linear OLS: {}".format(sum((y_linear-y)**2)))
 # print("MSE Polynomial OLS: {}".format(sum((y_poly-y)**2)))
-print("MSE Custom Multi-Fidelity GP: {}".format(sum((y_custom-y)**2)))
+# print("MSE Custom Multi-Fidelity GP: {}".format(sum((y_custom-y)**2)))

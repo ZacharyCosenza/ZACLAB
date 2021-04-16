@@ -19,15 +19,28 @@ def get_y_fid(x):
     y = ((x[:,0] - 0.5)**2 + 0.25*x[:,0] - 1) + 1 * (x[:,-1] == 1) + 2 * (x[:,-1] == 2)
     return y.reshape(-1,1)
 
-def get_mu_MC(x,X,Y,params):
-    C = get_C(x,X,Y,params)
-    L = np.linalg.cholesky(C + np.eye(C.shape[0]) * .0000001)
+def get_mu_MC(x,z,X,Y,params):
+    Kzz = get_K(z,z,params) + np.eye(z.shape[0]) * params[0]**2
+    Kxz = get_K(x,z,params)
+    # L = np.linalg.cholesky(Kzz)
+    # L_inv = np.linalg.pinv(L)
+    K_inv = np.linalg.pinv(Kzz)
     mu,_ = get_mu(x,X,Y,params)
-    M = 100000
-    Z = np.random.normal(0,1,size = (len(mu),M))
-    mu = np.tile(mu.reshape(len(mu),1),(1,M))
-    yy = mu + L @ Z
-    y = np.mean(yy,axis=1)
+    M = 100
+    Z = np.random.normal(0,1,size = (K_inv.shape[0],M))
+    yy = np.zeros([len(mu),M])
+    for i in np.arange(M):
+        yy[:,i] = (mu + Kxz @ K_inv @ Z[:,i]).flatten()
+    y = np.mean(yy,axis = 1)
+    
+    # C = get_C(x,X,Y,params)
+    # L = np.linalg.cholesky(C + np.eye(C.shape[0]) * .0000001)
+    # mu,_ = get_mu(x,X,Y,params)
+    # M = 100000
+    # Z = np.random.normal(0,1,size = (len(mu),M))
+    # mu = np.tile(mu.reshape(len(mu),1),(1,M))
+    # yy = mu + L @ Z
+    # y = np.mean(yy,axis=1)
     return y
 
 def get_mu(x,X,Y,params):
@@ -134,17 +147,21 @@ Y = get_y(X)
 n = 50
 x = np.zeros((n,2))
 x[:,0] = np.linspace(0,1,n)
+z = np.zeros((1,2))
+z[:,0] = 0.5
+yz = get_y(z)
 y = get_y(x)
 params = np.array([6,1,1]) #pick some parameters for the gp
 y_pred,_ = get_mu(x,X,Y,params)
-y_mc = get_mu_MC(x,X,Y,params)
+y_mc = get_mu_MC(x,z,X,Y,params)
 
-#Plot Data
+#Plot Data for Conditional
 plt.figure()
 plt.plot(X[:,0],Y,'rs')
 plt.plot(x[:,0],y,'k.')
 plt.plot(x[:,0],y_pred,'r.')
 plt.plot(x[:,0],y_mc,'b.')
+plt.plot(z[0][0],yz,'bs')
 plt.xlabel('x')
 plt.ylabel('y')
 
