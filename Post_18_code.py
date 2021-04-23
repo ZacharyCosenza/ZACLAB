@@ -5,11 +5,9 @@
 # Priors (noted lambda 0 is too high --> flat)
 # HMC Hyperparameter Training
 # Robust Toy Problems
-# Cholesky Conditioning in KG
 # Gradient of q-KG
 # q-Expected Improvement
-# 1) what happens when 0 vs 1,2 correlation breaks down?
-# 2) what happens when only 0 data used?
+# Heteroskedacity?
 # ---------------------------
 
 import numpy as np
@@ -31,27 +29,6 @@ from botorch import fit_gpytorch_model
 from gpytorch.constraints import Positive
 
 import copy
-
-np.random.seed(np.random.randint(1000))
-
-# def get_f(x):
-#     #Initalize
-#     y = np.zeros(x.shape[0])
-#     #Get Fidelities
-#     ind_0 = x[:,-1] == 0
-#     ind_1 = x[:,-1] == 1
-#     ind_2 = x[:,-1] == 2
-#     #Underlying Function
-#     y[ind_0] = np.sum((x[ind_0,0:5] - 0.5)**2,axis = 1) + np.sum(x[ind_0,5:10],axis = 1)
-#     y[ind_0] = y[ind_0] + np.random.uniform(0,0.1,size = len(y[ind_0]))
-#     #Add Fidelity 1
-#     y[ind_1] = np.sum((x[ind_1,0:5] - 0.5)**2,axis = 1) + np.sum(x[ind_1,5:10],axis = 1)
-#     y[ind_1] = y[ind_1] + np.random.uniform(0,0.25,size = len(y[ind_1]))
-#     #Add Fidleity 2
-#     y[ind_2] = np.sum((x[ind_2,0:2] - 0.5)**2,axis = 1) + np.sum(x[ind_2,0:2],axis = 1)
-#     y[ind_2] = y[ind_2] + np.random.uniform(0,0.1,size = len(y[ind_2]))
-#     return -y
-
 def get_f(x):
     #Initalize
     y = np.zeros(x.shape[0])
@@ -60,19 +37,21 @@ def get_f(x):
     ind_1 = x[:,-1] == 1
     ind_2 = x[:,-1] == 2
     #Underlying Function
-    y[ind_0] = np.sum(x[ind_0,:-1],axis = 1)
+    y[ind_0] = np.sum((x[ind_0,0:5] - 0.5)**2,axis = 1) + np.sum(x[ind_0,5:10],axis = 1)
+    y[ind_0] = y[ind_0] + np.random.uniform(0,0.1,size = len(y[ind_0]))
     #Add Fidelity 1
-    y[ind_1] = np.random.uniform(0,0.25,size = len(y[ind_1]))
+    y[ind_1] = np.sum((x[ind_1,0:5] - 0.5)**2,axis = 1) + np.sum(x[ind_1,5:10],axis = 1)
+    y[ind_1] = y[ind_1] + np.random.uniform(0,0.25,size = len(y[ind_1]))
     #Add Fidleity 2
-    y[ind_2] = np.sum(x[ind_2,:-1],axis = 1)
-    y[ind_2][x[ind_2,0]<=0.5] = 0
-    return y
+    y[ind_2] = np.sum((x[ind_2,0:2] - 0.5)**2,axis = 1) + np.sum(x[ind_2,0:2],axis = 1)
+    y[ind_2] = y[ind_2] + np.random.uniform(0,0.1,size = len(y[ind_2]))
+    return -y
 
 #Generate Training and Testing Data
 N = 20
 n = 400
 n_reps = 1
-px = 1 #not including fidelity
+px = 3 #not including fidelity
 X = np.random.uniform(0,1,size = (N,px+1))
 X = np.repeat(X,n_reps,axis = 0) #replicates
 x = np.random.uniform(0,1,size = (n,px+1))
@@ -96,13 +75,13 @@ def con(p, p_start = 0, p_end = 1):
     """
     return p[int(p_start)] - p[int(p_end)]
 
-def generate_constraints(p):
+def generate_constraints(x_size):
     """
     generate a list of constraints based on:
     n_con -- number of constraints
     con_args -- a n_con x 2 list of parameters to be passed to con
     """
-    ind = np.arange(len(p[0]))
+    ind = np.arange(x_size)
     
     ind_0 = ind[0:px*q0]
     ind_1 = ind[px*q0:px*(q0+q0)]
@@ -133,9 +112,10 @@ def get_opt_qKG(q,q0,Nxx,X,Y,params):
     x_bounds = []
     for i in range(x_size):
         x_bounds.append((0,1))
-    M = 35
+    M = 5
     x = np.zeros([M,x_size])
     aq = np.zeros(M)
+    con = generate_constraints(x_size)
     for i in tqdm(np.arange(M)):
         x0 = np.random.uniform(low = 0, high = 1, size = x_size)
         # bfgs = scipy.optimize.fmin_l_bfgs_b(func=wrapper_qKG, x0=x0,args=(q,q0,Nxx,X,Y,params), approx_grad=True,
@@ -144,7 +124,6 @@ def get_opt_qKG(q,q0,Nxx,X,Y,params):
         #                                 disp=0, callback=None)
         # x[i,:] = bfgs[0]
         # aq[i] = wrapper_qKG(x[i,:],q,q0,Nxx,X,Y,params)
-        con = generate_constraints(x)
         slsqp = minimize(fun = wrapper_qKG,
                         x0 = x0,
                         args = (q,q0,Nxx,X,Y,params),
@@ -176,32 +155,62 @@ def wrapper_qKG(p,q,q0,Nxx,X,Y,params):
 
 def get_chol_samples(x,mu,C,X,Y,M,params):
     L = np.linalg.cholesky(C + np.eye(len(mu)) * 0.00001)
+    np.random.seed(1)
     z = np.random.normal(0,1,size = (len(mu),M))
     y_sample = mu.reshape(len(mu),1) + L @ z
     return y_sample
 
+def get_cond_samples(x,mu_x,X,params):
+    #x is point you want to predict
+    #mu_x is prediction of that point
+    #X is what is being conditioned on
+    np.random.seed(1)
+    KXX = get_K(X,X,params) + np.eye(X.shape[0]) * params[0]**2
+    D = np.linalg.cholesky(KXX)
+    D_inv = np.linalg.pinv(D)
+    KxX = get_K(x,X,params)
+    M = 1000
+    Z = np.random.normal(0,1,size = (X.shape[0],M))
+    mu = mu_x + KxX @ D_inv @ Z
+    return np.mean(mu,axis = 1)
+
 def get_qKG(x,xx,X,Y,params):
+    # #Direct Method (For Testing)
     # mu_,_ = get_mu(x,X,Y,params)
     # X_ = np.vstack((X,x))
     # Y_ = np.hstack((Y,mu_))
     # mu,_ = get_mu(xx,X_,Y_,params)
     # q_KG = np.mean(mu)
-    #x Actual Point
-    #xx Fantasy Point at Fidelity = 0
-    mu_,_ = get_mu(x,X,Y,params)
-    C = get_C(x,X,Y,params)
-    #Get Nxx Samples of Posterior
-    M = xx.shape[0]
-    yy = get_chol_samples(x,mu_,C,X,Y,M,params)
-    #For Each Sample, Predict Each Fantasy
-    qkg_per_fant = np.zeros(M)
-    for i in np.arange(M):   
-        X_ = np.vstack((X,x))
-        Y_ = np.hstack((Y,yy[:,i]))
+    
+    # #Semi-Sampling Method
+    # #x Actual Point
+    # #xx Fantasy Point at Fidelity = 0
+    # mu_,_ = get_mu(x,X,Y,params)
+    # C = get_C(x,X,Y,params)
+    # #Get Nxx Samples of Posterior
+    # M = xx.shape[0]
+    # yy = get_chol_samples(x,mu_,C,X,Y,M,params)
+    # #For Each Sample, Predict Each Fantasy
+    # qkg_per_fant = np.zeros(M)
+    # for i in np.arange(M):   
+    #     X_ = np.vstack((X,x))
+    #     Y_ = np.hstack((Y,yy[:,i]))
+    #     x_fant = xx[i,:].reshape(1,xx.shape[1])
+    #     mu,_ = get_mu(x_fant,X_,Y_,params)
+    #     qkg_per_fant[i] = mu
+    # #Average of Fantasy Points (Balandat et al)
+    # q_KG = np.mean(qkg_per_fant)
+    
+    #Joint-Sampling Method
+    M = 1
+    mu_,_ = get_mu(xx,X,Y,params)
+    C = get_C(xx,X,Y,params)
+    mu_x = get_chol_samples(xx,mu_,C,X,Y,M,params)
+    # mu_x,_ = get_mu(xx,X,Y,params)
+    qkg_per_fant = np.zeros(xx.shape[0])
+    for i in np.arange(xx.shape[0]):   
         x_fant = xx[i,:].reshape(1,xx.shape[1])
-        mu,_ = get_mu(x_fant,X_,Y_,params)
-        qkg_per_fant[i] = mu
-    #Average of Fantasy Points (Balandat et al)
+        qkg_per_fant[i] = get_cond_samples(x_fant,mu_x[i],x,params)
     q_KG = np.mean(qkg_per_fant)
     return q_KG
 
@@ -275,6 +284,24 @@ def get_dKdlam(X,params,k):
                     L = lambdas[2]
                     dKdsigmaf[i,j] = sigmaf[2]**2 * np.exp(-d / L**2 / 2) * d / L**3  
     return dKdsigmaf
+
+def get_dKdx(x,X,Y,params):
+    num_IS = 3
+    sigmaf = params[1:num_IS+1]
+    lambdas = params[num_IS+1:]
+    K = np.zeros([x.shape[0],X.shape[0]])
+    for i in np.arange(x.shape[0]):
+        IS = int(x[i,-1])
+        for j in np.arange(X.shape[0]):
+            d = (x[i,:-1]-X[j,:-1]) @ (x[i,:-1]-X[j,:-1]).T
+            #Primary Kernel
+            L0 = lambdas[0]
+            K[i,j] = sigmaf[0]**2 * np.exp(-d / L0**2 / 2)
+            #Deviation Kernel
+            if IS != 0 and IS == X[j,-1]:
+                L = lambdas[IS]
+                K[i,j] = K[i,j] + sigmaf[IS]**2 * np.exp(-d / L**2 / 2)
+    return K
 
 def get_C(x,X,Y,params):
     Kxx = get_K(x,x,params)
@@ -372,22 +399,22 @@ def get_opt_params(X,Y):
     return params_opt
 
 # Solution to GP Problem
-params = get_opt_params(X,Y)
-# params = np.array([0.0360055,0.3983522,0.0582616,2.19184049,0.95576314,1.42709205,4.16834235])
+# params = get_opt_params(X,Y)
+params = np.array([0.0360055,0.3983522,0.0582616,2.19184049,0.95576314,1.42709205,4.16834235])
 y_custom,std2_custom = get_mu(x,X,Y,params)
 
 # Test of q-KG
 q = 2
 q0 = 1
-Nxx = 10
+Nxx = 5
 
 # Test of q-KG Optimization
-# start = time.time()
-# x_opt_query,x_fantasy = get_opt_qKG(q,q0,Nxx,X,Y,params)
-# end = time.time()
-# print(end - start)
-# print(x_opt_query)
-# print(x_fantasy)
+start = time.time()
+x_opt_query,x_fantasy = get_opt_qKG(q,q0,Nxx,X,Y,params)
+end = time.time()
+print(end - start)
+print(x_opt_query)
+print(x_fantasy)
 
 def train(X,Y,model,likelihood,training_iter=100):
     X = torch.tensor(X,dtype=torch.double)
@@ -490,20 +517,20 @@ class CustomModel(gpytorch.models.ExactGP):
 # train(X,Y,model_custom,like_custom)
 # y_bo_custom = predict(model_custom,like_custom,x).mean
 
-model_fid = SingleTaskMultiFidelityGP(
-    torch.tensor(X), 
-    torch.tensor(Y).unsqueeze(-1),
-    data_fidelity=px)
+# model_fid = SingleTaskMultiFidelityGP(
+#     torch.tensor(X), 
+#     torch.tensor(Y).unsqueeze(-1),
+#     data_fidelity=px)
 # model = SingleTaskGP(torch.tensor(X[X[:,-1]==0,:-1]),
 #                       torch.tensor(Y[X[:,-1]==0]).unsqueeze(-1))
-mll_fid = ExactMarginalLogLikelihood(model_fid.likelihood, model_fid)
-mll_fid = fit_gpytorch_model(mll_fid)
+# mll_fid = ExactMarginalLogLikelihood(model_fid.likelihood, model_fid)
+# mll_fid = fit_gpytorch_model(mll_fid)
 # mll = ExactMarginalLogLikelihood(model.likelihood,model)
 # mll = fit_gpytorch_model(mll)
 # model_task = MultiTaskGP(torch.tensor(X),torch.tensor(Y).unsqueeze(-1),task_feature=-1)
 
-with torch.no_grad():
-    y_bo_fid = model_fid.posterior(torch.tensor(x)).mean.cpu().numpy()
+# with torch.no_grad():
+    # y_bo_fid = model_fid.posterior(torch.tensor(x)).mean.cpu().numpy()
     # y_bo = model.posterior(torch.tensor(x[x[:,-1]==0,:-1])).mean.cpu().numpy()
     # y_task = model_task.posterior(torch.tensor(x[:,:-1])).mean.cpu().numpy()
 
@@ -523,7 +550,7 @@ plt.plot(x[:,0],y,'k.',markersize=markersize)
 plt.plot(X[X[:,-1]==0,0],Y[X[:,-1]==0],'ks')
 plt.plot(X[X[:,-1]==1,0],Y[X[:,-1]==1],'k+')
 plt.plot(X[X[:,-1]==2,0],Y[X[:,-1]==2],'k*')
-plt.plot(x[:,0],y_bo_fid,'b.',markersize=markersize)
+# plt.plot(x[:,0],y_bo_fid,'b.',markersize=markersize)
 # plt.plot(x[x[:,-1]==0,0],y_bo,'b.',markersize=markersize)
 # plt.plot(x[:,0],y_task[:,0],'y.',markersize=markersize)
 # plt.plot(x[:,0],y_linear,'c.',markersize=markersize)
@@ -534,7 +561,7 @@ plt.plot(x[:,0],y_custom,'r.',markersize=markersize)
 # plt.ylabel('y')
 
 plt.subplot(1,2,2)
-plt.plot(y,y_bo_fid,'b.',markersize=markersize)
+# plt.plot(y,y_bo_fid,'b.',markersize=markersize)
 # plt.plot(y,y_bo,'b.',markersize=markersize)
 # plt.plot(y,y_task[:,0],'y.',markersize=markersize)
 # plt.plot(y,y_linear,'c.',markersize=markersize)
