@@ -38,31 +38,37 @@ def get_f(x):
     ind_2 = x[:,-1] == 2
     #Underlying Function
     y[ind_0] = np.sum((x[ind_0,0:5] - 0.5)**2,axis = 1) + np.sum(x[ind_0,5:10],axis = 1)
-    y[ind_0] = y[ind_0] + np.random.uniform(0,0.1,size = len(y[ind_0]))
+    y[ind_0] = y[ind_0] + np.random.normal(0,0.1*2.5,size = len(y[ind_0]))
     #Add Fidelity 1
     y[ind_1] = np.sum((x[ind_1,0:5] - 0.5)**2,axis = 1) + np.sum(x[ind_1,5:10],axis = 1)
-    y[ind_1] = y[ind_1] + np.random.uniform(0,0.25,size = len(y[ind_1]))
+    y[ind_1] = y[ind_1] + np.random.normal(0,0.1*2.5,size = len(y[ind_1]))
     #Add Fidleity 2
     y[ind_2] = np.sum((x[ind_2,0:2] - 0.5)**2,axis = 1) + np.sum(x[ind_2,0:2],axis = 1)
-    y[ind_2] = y[ind_2] + np.random.uniform(0,0.1,size = len(y[ind_2]))
+    y[ind_2] = y[ind_2] + np.random.normal(0,0.1*2.5,size = len(y[ind_2]))
     return -y
 
 #Generate Training and Testing Data
 N = 20
 n = 400
 n_reps = 1
-px = 3 #not including fidelity
+px = 1 #not including fidelity
 X = np.random.uniform(0,1,size = (N,px+1))
 X = np.repeat(X,n_reps,axis = 0) #replicates
 x = np.random.uniform(0,1,size = (n,px+1))
-task = np.random.choice(3,X.shape[0],p=[0.2,0.4,0.4])
+task = np.random.choice(3,X.shape[0],p=[1,0,0])
 X[:,-1] = task
 x[:,-1] = 0 #set testing data to fidelity 0
 Y = get_f(X)
+y = get_f(x)
 common_std = Y.std()
 common_mean = Y.mean()
+plt.figure()
+markersize = 2
+plt.plot(x[:,0],y,'k.',markersize=markersize)
+plt.plot(X[X[:,-1]==0,0],Y[X[:,-1]==0],'ks')
+plt.plot(X[X[:,-1]==1,0],Y[X[:,-1]==1],'k+')
+plt.plot(X[X[:,-1]==2,0],Y[X[:,-1]==2],'k*')
 Y = (Y - common_mean) / common_std
-y = get_f(x)
 y = (y - common_mean) / common_std
 num_IS = 3
 
@@ -396,12 +402,19 @@ def get_opt_params(X,Y):
         like[i] = get_like(params[i,:],X,Y)
     ind_like = np.argmax(like)
     params_opt = params[ind_like,:]
-    return params_opt
+    return params_opt,params
 
 # Solution to GP Problem
-# params = get_opt_params(X,Y)
-params = np.array([0.0360055,0.3983522,0.0582616,2.19184049,0.95576314,1.42709205,4.16834235])
+params,allparams = get_opt_params(X,Y)
+# params = np.array([0.0360055,0.3983522,0.0582616,2.19184049,0.95576314,1.42709205,4.16834235])
 y_custom,std2_custom = get_mu(x,X,Y,params)
+
+for i in np.arange(10):
+    plt.figure()
+    plt.plot(y,y,'k.')
+    plt.plot(y,get_mu(x,X,Y,allparams[i,:])[0],'r.')
+
+#%%
 
 # Test of q-KG
 q = 2
@@ -409,12 +422,12 @@ q0 = 1
 Nxx = 5
 
 # Test of q-KG Optimization
-start = time.time()
-x_opt_query,x_fantasy = get_opt_qKG(q,q0,Nxx,X,Y,params)
-end = time.time()
-print(end - start)
-print(x_opt_query)
-print(x_fantasy)
+# start = time.time()
+# x_opt_query,x_fantasy = get_opt_qKG(q,q0,Nxx,X,Y,params)
+# end = time.time()
+# print(end - start)
+# print(x_opt_query)
+# print(x_fantasy)
 
 def train(X,Y,model,likelihood,training_iter=100):
     X = torch.tensor(X,dtype=torch.double)
